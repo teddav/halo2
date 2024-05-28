@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::iter;
+use std::mem::discriminant;
+use std::mem::Discriminant;
 use std::ops::{Add, Mul, Neg, Range};
 
 use blake2b_simd::blake2b;
@@ -339,6 +341,52 @@ impl<F: Field> InstanceValue<F> {
 impl<F: Field> MockProver<F> {
     fn in_phase<P: Phase>(&self, phase: P) -> bool {
         self.current_phase == phase.to_sealed()
+    }
+}
+
+// This allows the user to modify the cells manually and try to forge the proof
+impl<F: Field> MockProver<F> {
+    /// Return the content of an advice column as mutable
+    pub fn advice_mut(&mut self, column_index: usize) -> &mut [CellValue<F>] {
+        self.advice[column_index].as_mut_slice()
+    }
+
+    /// Return the content of an instance column as mutable
+    pub fn instance_mut(&mut self, column_index: usize) -> &mut [InstanceValue<F>] {
+        self.instance[column_index].as_mut_slice()
+    }
+
+    /// Modifies a cell in an advice column
+    pub fn modify_advice(&mut self, value: F, column_index: usize, cell_index: usize) {
+        self.advice[column_index][cell_index] = CellValue::Assigned(value);
+        self.add_to_region(discriminant(&Any::advice()), column_index, cell_index);
+    }
+
+    /// Modifies a cell in an advice column
+    pub fn modify_instance(&mut self, value: F, column_index: usize, cell_index: usize) {
+        self.instance[column_index][cell_index] = InstanceValue::Assigned(value);
+        self.add_to_region(discriminant(&Any::Instance), column_index, cell_index);
+    }
+
+    // during proof verification, in `selector_errors` all the cells of a region are checked
+    // to make sure every cells checked by a selector are assigned
+    /// adds a cell to a regions
+    pub fn add_to_region(
+        &mut self,
+        column_type: Discriminant<Any>,
+        column_index: usize,
+        cell_index: usize,
+    ) {
+        for region in self.regions.iter_mut() {
+            let mut cols: Vec<Column<Any>> = region.cells.keys().map(|k| k.0).collect();
+            cols.sort();
+            cols.dedup();
+            for col in cols {
+                if column_type == discriminant(col.column_type()) && column_index == col.index() {
+                    region.cells.insert((col, cell_index), 0);
+                }
+            }
+        }
     }
 }
 
