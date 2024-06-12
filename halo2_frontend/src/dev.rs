@@ -2189,7 +2189,7 @@ mod tests {
 
                         region.assign_advice(|| "a0", config.a, 0, || Value::known(Fp::from(3)))?;
                         region.assign_advice(|| "a1", config.a, 1, || Value::known(Fp::from(9)))?;
-                        region.assign_advice(|| "a2", config.a, 2, || Value::known(Fp::from(10)))
+                        region.assign_advice(|| "a2", config.a, 2, || Value::known(Fp::from(81)))
                     },
                 )?;
 
@@ -2197,7 +2197,8 @@ mod tests {
             }
         }
 
-        let mut prover = MockProver::run(K, &EasyCircuit {}, vec![vec![Fp::from(11)]]).unwrap();
+        let mut prover = MockProver::run(K, &EasyCircuit {}, vec![vec![Fp::from(81)]]).unwrap();
+        assert_eq!(prover.verify(), Ok(()));
 
         let err1 = VerifyFailure::ConstraintNotSatisfied {
             constraint: ((0, "squared").into(), 0, "").into(),
@@ -2218,22 +2219,38 @@ mod tests {
         };
 
         let err2 = VerifyFailure::Permutation {
-            column: ColumnMid::new(Any::Advice, 0).into(),
+            column: ColumnMid::new(Any::Advice, 0),
             location: FailureLocation::InRegion {
                 region: (0, "main region").into(),
                 offset: 2,
             },
         };
 
-        assert_eq!(prover.verify(), Err(vec![err1, err2.clone()]));
+        // first we modify the instance -> this results in the permutation being unsatisfied
+        let instance = prover.instance_mut(0);
+        instance[0] = InstanceValue::Assigned(Fp::from(11));
+        assert_eq!(prover.verify(), Err(vec![err2.clone()]));
 
+        // then we modify the witness -> the contraint `squared` will fail
         let advice0 = prover.advice_mut(0);
-        advice0[2] = CellValue::Assigned(Fp::from(81));
+        advice0[2] = CellValue::Assigned(Fp::from(10));
+        assert_eq!(prover.verify(), Err(vec![err1, err2]));
 
-        assert_eq!(prover.verify(), Err(vec![err2]));
-
+        // we reset back to original values
         let instance = prover.instance_mut(0);
         instance[0] = InstanceValue::Assigned(Fp::from(81));
+        let advice0 = prover.advice_mut(0);
+        advice0[2] = CellValue::Assigned(Fp::from(81));
+        assert_eq!(prover.verify(), Ok(()));
+
+        // and now we try to trick the verifier
+        // we assign on row 0 `Fp - 3`, which is also a square root of 9
+        // but will overflow the prime field
+        let sqrt_9 = Fp::zero() - Fp::from(3);
+        let advice0 = prover.advice_mut(0);
+        advice0[0] = CellValue::Assigned(sqrt_9);
+
+        // if this verifies correctly -> we have an issue and we are missing a range check
         assert_eq!(prover.verify(), Ok(()));
     }
 }
